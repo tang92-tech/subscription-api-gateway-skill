@@ -1,0 +1,15 @@
+.env
+.env.*
+!.env.example
+data/
+backups/
+vendor/
+*.db
+*.sqlite*
+*.log
+*.pem
+*.key
+credentials*.json
+oauth-state.json
+accounts.json
+.DS_Store

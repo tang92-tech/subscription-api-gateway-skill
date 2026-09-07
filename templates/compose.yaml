@@ -1,0 +1,43 @@
+services:
+  multivibe:
+    build:
+      context: ./vendor/multivibe
+      args:
+        GIT_SHA: ${MULTIVIBE_COMMIT:-pinned}
+        BUILD_ID: ${MULTIVIBE_COMMIT:-pinned}
+    container_name: subscription-multivibe
+    network_mode: host
+    user: "${PROXY_UID:-10001}:${PROXY_GID:-10001}"
+    environment:
+      PORT: "1455"
+      PUBLIC_BASE_URL: http://localhost:1455
+      STORE_PATH: /data/accounts.json
+      OAUTH_STATE_PATH: /data/oauth-state.json
+      TRACE_FILE_PATH: /data/requests-trace.jsonl
+      REQUEST_BODY_LIMIT: 32mb
+      PROXY_MODELS: ${PROXY_MODELS:-gpt-placeholder}
+      MODELS_CACHE_MS: "600000"
+      ADMIN_TOKEN: ${MULTIVIBE_ADMIN_TOKEN:?missing MULTIVIBE_ADMIN_TOKEN}
+      PROXY_API_KEY: ${MULTIVIBE_PROXY_KEY:?missing MULTIVIBE_PROXY_KEY}
+      OAUTH_REDIRECT_URI: http://localhost:1455/auth/callback
+    volumes:
+      - ./data/multivibe:/data
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  new-api:
+    image: ${NEW_API_IMAGE:?missing NEW_API_IMAGE}
+    container_name: subscription-new-api
+    network_mode: host
+    environment:
+      TZ: ${TZ:-UTC}
+      SESSION_SECRET: ${NEWAPI_SESSION_SECRET:?missing NEWAPI_SESSION_SECRET}
+      ERROR_LOG_ENABLED: "true"
+    volumes:
+      - ./data/new-api:/data
+    depends_on:
+      - multivibe
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true

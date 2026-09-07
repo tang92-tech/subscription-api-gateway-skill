@@ -1,0 +1,13 @@
+[Unit]
+Description=Protect subscription gateway local admin ports
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables/subscription-gateway.nft
+ExecStop=/usr/sbin/nft delete table inet subscription_gateway
+
+[Install]
+WantedBy=multi-user.target

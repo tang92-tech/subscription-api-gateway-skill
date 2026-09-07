@@ -1,0 +1,4 @@
+interface:
+  display_name: "Subscription API Gateway"
+  short_description: "Deploy an authorized subscription-to-API gateway safely"
+  default_prompt: "Read AGENTS.md and SKILL.md. Inventory first, ask before server changes, keep all secrets out of chat and Git, pause for human OAuth, then deploy and verify the pinned gateway."

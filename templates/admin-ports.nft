@@ -1,0 +1,7 @@
+table inet subscription_gateway {
+  chain input {
+    type filter hook input priority -5; policy accept;
+    iifname "lo" accept
+    tcp dport { 1455, 3000 } drop
+  }
+}
