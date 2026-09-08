@@ -78,3 +78,7 @@ TOKEN="$TOKEN" MODEL="<discovered-model>" \
   ./scripts/smoke-test.sh --public https://api.example.com:8443
 unset TOKEN
 ```
+
+## GPT-6 与模型发现版本
+
+MultiVibe 用 `client_version` 请求上游模型目录，旧默认版本只返回 gpt-5.x。要发现 GPT-6（如 `gpt-6-astra`），设置 `MODELS_CLIENT_VERSION=0.160.0`（或更高）后重启反代层。账号是否有某模型以 `/v1/models` 实际返回为准。
