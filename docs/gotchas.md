@@ -1,0 +1,98 @@
+# Gotchas
+
+Real pitfalls verified on a live AlmaLinux 9 VPS deployment. Each item was reproduced and fixed in production, not inferred from documentation.
+
+---
+
+## Networking and routing
+
+**1. Linux forwarding does not honor `from`-type policy routing.**
+To route container traffic through a tunnel interface, the only reliable path found was: host networking + a fixed uid + `iptables mangle OUTPUT -m owner` marking + `ip rule fwmark`. Bridge networks combined with `ip rule from <subnet>` were completely ineffective (packets escaped via the main table and were rejected upstream with HTTP 403).
+
+**2. Tunnel replies silently dropped by `rp_filter`.**
+Traffic leaving but never returning is usually reverse-path filtering, not routing. A virtual gateway address can be pingable while replies are still dropped. Setting the tunnel interface's `rp_filter` to `0` (`sysctl -w net.ipv4.conf.<iface>.rp_filter=0`) fixed it immediately. `ip route get ... from <other-subnet>` reporting `Network is unreachable` is a misleading signal.
+
+**3. The custom routing table's default route needs a virtual gateway plus `onlink`.**
+`ip route replace default via <virtual-gw> dev <iface> onlink table <n>`. A bare `dev` route carries the PERVASIVE flag, cannot take `onlink`, and fails scope-link validation.
+
+**4. Keep DNS out of the tunnel.**
+Mark only `tcp --dports 80,443`. If UDP 53 is also tunneled, name resolution times out.
+
+**5. Do not leave tunnel rules in place during Docker builds.**
+Build traffic routed through the tunnel breaks package and npm mirrors (e.g. `no such package`). Remove the `ip rule` during builds and restore it afterward. Make the network script idempotent and re-runnable.
+
+---
+
+## Installation
+
+**6. AlmaLinux 9 is not supported by `get.docker.com`.**
+Use the CentOS repository instead:
+
+```bash
+dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+dnf -y install docker-ce docker-ce-cli containerd.io docker-compose-plugin
+```
+
+---
+
+## New API
+
+**7. Use the Docker Hub image.**
+`calciumion/new-api:latest` works. A GHCR path failed (uppercase rejected by Docker, lowercase unauthorized). Pin by digest for reproducible deployments rather than tracking `latest`.
+
+**8. The v1.x HTTP API differs from older versions.**
+First-run setup requires a `confirmPassword` field. Channel creation must nest the payload: `{"mode":"single","channel":{...}}`. Channel updates via `PUT /api/channel/` must **not** include `status`. To read a full token key use `POST /api/token/:id/key`. The self-use mode flag lives in the SQLite `options` table (`SelfUseModeEnabled`); changing it through the API option endpoint may not take effect — write the DB and restart the container.
+
+**9. Token updates are full-field replacements, not patches (important).**
+`PUT /api/token/` overwrites every field. Omitting `name`, quota, or the model whitelist clears them, and can push the token into `status=4` (quota exhausted / disabled). `status` cannot be restored through that endpoint; fix it in SQLite (`UPDATE tokens SET status=1, unlimited_quota=1, remain_quota=0, model_limits_enabled=0 WHERE id=<id>`) and restart the container. Always send the complete field set when updating a token.
+
+**10. OpenAI-type channel `base_url` must not include `/v1`.**
+The gateway appends the API path itself. Setting `https://api.example.com/v1` produces `.../v1/v1/chat/completions` and a 404 (`url.not_found`). Use `https://api.example.com`.
+
+**11. Channel model changes must go through the API (important).**
+New API routes models through a separate `abilities` table (`group/model/channel_id/enabled`). Editing `channels.models` directly in SQLite **does not update `abilities`**, producing `No available channel for model xxx` even when the channel is enabled and the group matches. Update the channel via `PUT /api/channel/` so the mapping is rebuilt. If you already edited the DB, verify with:
+
+```sql
+select "group", model, channel_id from abilities where channel_id = <id>;
+```
+
+**12. Login has a session cap.**
+Repeated logins return `AUTH_SESSION_LIMIT` (HTTP 409 Conflict), which is easy to misread as a wrong password. Clear `DELETE FROM user_sessions;` to recover. Automation should reuse one access token instead of logging in per request.
+
+**13. Open registration is enabled by default (security).**
+Defaults are `RegisterEnabled=true`, `EmailVerificationEnabled=false`, `TurnstileCheckEnabled=false`. Once a panel is reachable from the internet, scanners will register accounts in bulk and each gets an auto-generated `rt-*` / `auto-*` token. Disable registration through the API (`PUT /api/option/` with `RegisterEnabled` and `PasswordRegisterEnabled` set to false) — writing the `options` table directly can be overwritten by cached state. Audit `users` and `tokens` counts periodically.
+
+**14. Do not put nginx Basic Auth in front of a single-page app panel.**
+The dashboard is a SPA that fires continuous XHR after page load. Basic Auth intercepts those requests and returns an authentication challenge; browsers handle credentials inconsistently for XHR (the same path can answer 200 and 401), so the browser prompts for credentials repeatedly and keeps prompting even after correct input. If you want an extra layer, exclude API paths with a `map` (e.g. return `off` for `~^/(api|v1|v1beta)(/|$)`) and protect only page routes — or use IP allow-listing / an access proxy instead.
+
+**15. Provider model IDs are not what they look like.**
+Always read the provider's own `GET /v1/models` rather than guessing from model names. Example: the marketing name "V4.1 Flash" maps to the API id `deepseek-flash`, not `deepseek-v4-flash`. A wrong id yields `No available channel for model ...` once routing is involved. Reasoning models may consume a small `max_tokens` budget entirely on reasoning, leaving `content` empty — allow generous token limits when testing.
+
+**16. `sk-kimi-` style keys may belong to a dedicated coding endpoint.**
+A key prefixed `sk-kimi-` belonged to a coding subscription whose endpoint is `https://api.kimi.com/coding/v1`. Pointing it at the general vendor endpoint returned `Invalid Authentication` on every attempt, which is easily misdiagnosed as an invalid key and leads to unnecessary key rotation. **Check the endpoint before replacing the key.**
+
+---
+
+## Gateway behavior
+
+**17. OAuth token refresh can deadlock (important).**
+Some reverse-proxy implementations only auto-refresh on HTTP 401 for specific providers. If a provider's access token is invalidated upstream while the locally stored `expiresAt` is still in the future, nothing triggers a refresh: the local copy believes the token is valid, upstream keeps returning 401, and **every model from that account becomes unusable** while the discovered model count drops. Recovery: stop the container, set the account's `expiresAt=1` and `state.needsTokenRefresh=true` in the accounts store, start the container, then **issue one real request** to trigger the lazy refresh. Deploy a periodic health-check job that performs a real completion call and self-heals on token errors.
+
+**18. Upstream model catalogs change on the vendor's schedule.**
+The reverse proxy re-discovers models periodically; treat its `/v1/models` output as the source of truth. When models are added or retired: compare the live list, update each channel's `models` via the API, verify the `abilities` mapping, then run an end-to-end call. **Do not retire an old model early** — keep it while the upstream still returns it, and remove it only after the upstream stops serving it.
+
+**19. Quota exhaustion presents as 402 and triggers temporary model-level blocks.**
+When an upstream returns `quota/rate-limit: 402`, the proxy may record `{until, reason}` blocks per model in the account state, surfacing as `no provider accounts configured for requested model` or `all accounts exhausted or unavailable`. **This is not a configuration failure.** It clears when the quota window resets; no channel change is required.
+
+---
+
+## Domains and TLS
+
+**20. Custom domain checklist.**
+1. If DNS is hosted behind a CDN with a wildcard record (e.g. `*.example.com`), an undefined subdomain is captured by that wildcard and points at the wildcard's target — which can produce CDN 5xx errors such as 522. Add an explicit A/AAAA record for the subdomain; specific records take precedence over wildcards.
+2. When the service listens on a **non-standard port**, set the record to **DNS only** (no proxy). Proxy modes handle non-standard origin ports unreliably; DNS-only lets clients connect straight to the origin with your own certificate.
+3. Diagnose with `curl --resolve <host>:<port>:<origin-ip> <url>` to bypass the CDN and reach the origin directly — this cleanly separates "service failure" from "DNS/CDN failure".
+4. Automate renewal and pair it with a validation hook, e.g. a daily `certbot renew` cron job with `--deploy-hook "nginx -t && systemctl reload nginx"`.
+
+**21. Context limits differ between the official API and a subscription relay path.**
+A model's official API may advertise a much larger context window than the subscription relay path actually permits (the relay limit can align with a pricing tier boundary). Fill in the value the relay reports, not the official marketing number — otherwise clients believe there is headroom and send oversized prompts that the upstream rejects.
