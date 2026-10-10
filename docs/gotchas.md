@@ -102,3 +102,12 @@ New API uses GORM soft deletes: the `deleted_at` column is a `*time.Time`, store
 
 **23. Renaming the administrator account requires updating login references.**
 A root/admin username can be changed (password, permissions, and user id stay the same), and the old username stops working immediately. After renaming, update every credential file and automation script that logs in with the old name. Dashboards and historical logs aggregate by user id, so the rename does not disturb past statistics.
+
+**24. An empty `forward` chain with `policy drop` silently blocks all bridged-container egress.**
+If nftables has a `table inet filter` whose `chain forward` is empty with `policy drop`, host-networked containers keep working while **bridged containers (image builds, `docker run`) lose all outbound connectivity**. Symptoms: DNS timeouts inside the container, `apk add` reporting `no such package`, npm fetches failing — while the host's own networking is perfectly healthy, which makes it easy to misattribute to a mirror or tunnel problem. Fix: add `ct state established,related accept` plus `iifname`/`oifname accept` rules for each docker bridge, and make it an idempotent boot-time script.
+
+**25. A reverse proxy's tool-type allowlist governs which model capabilities survive.**
+Some relays filter tools against the upstream's declared `supported_tool_types`. If upstream declares only `["function"]`, tools such as `image_generation` or `web_search` are **silently dropped** (the echoed response shows `"tools":[]` with no error). Diagnose by probing the upstream directly with each tool type before relaxing any local allowlist. Verified in practice: `image_generation` and `web_search` are accepted upstream while `computer_use_preview` is rejected with HTTP 400 — **do not blanket-allow every type**; test each one.
+
+**26. Desktop-agent "computer use" usually comes from a local MCP server, not the API.**
+Local computer-use capabilities are typically exposed by a local MCP server plus a bundled plugin, not by a model-side tool flag. When it "stops working" after switching to a custom gateway, check the local configuration first: an `enabled = false` flag, or a `command` that uses a fragile relative path. Treating it as a gateway fault wastes a lot of time.
