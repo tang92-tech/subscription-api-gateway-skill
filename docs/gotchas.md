@@ -117,3 +117,9 @@ Some relays only count `response.output_text.*`, message items, and function/cus
 
 **28. Always probe with streaming when validating Codex-style clients.**
 The same request can behave differently under `stream:false` (buffered rebuild path) versus `stream:true` (frame-by-frame passthrough) — buffered paths may lose non-text output items such as images, while streaming delivers them intact. Desktop agents use streaming, so a probe that omits `stream:true` and `Accept: text/event-stream` can wrongly conclude the change had no effect. Acceptance: the three `response.image_generation_call.*` events are present, `output_item.done` carries a valid base64 `result`, and the account state gains **no new** model block for that model.
+
+**29. Desktop-agent "computer use" is a local MCP server; the usual broken config is a relative path plus `cwd = "."` plus `enabled = false`.**
+`cwd = "."` resolves against the current session working directory rather than the agent's config directory, so the relative command path can never resolve. Flipping `enabled` to true therefore does **not** fix it — it only adds a failing entry at startup. Correct order: (1) read-only search for the real executable location; (2) verify it exists and is executable; (3) only then set `command` to the absolute path, `cwd` to the app's parent directory, and `enabled = true`; (4) validate the TOML; (5) have the human restart. Chasing this as an API fault wastes time.
+
+**30. An MCP installer's startup self-check does not prove the feature works.**
+Self-checks typically only confirm that MCP `initialize` returns `serverInfo`, so a wrong gateway URL or an invalid API key **still passes**. End-to-end acceptance requires one real tool invocation (e.g. actually generating an image) plus confirming the artifact exists on disk and is recognized by `file`.
