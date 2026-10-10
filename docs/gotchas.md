@@ -96,3 +96,9 @@ When an upstream returns `quota/rate-limit: 402`, the proxy may record `{until, 
 
 **21. Context limits differ between the official API and a subscription relay path.**
 A model's official API may advertise a much larger context window than the subscription relay path actually permits (the relay limit can align with a pricing tier boundary). Fill in the value the relay reports, not the official marketing number — otherwise clients believe there is headroom and send oversized prompts that the upstream rejects.
+
+**22. Soft-delete columns must be written as DATETIME text, never as an integer timestamp.**
+New API uses GORM soft deletes: the `deleted_at` column is a `*time.Time`, stored as DATETIME text in SQLite. If you clean up users or tokens with `UPDATE ... SET deleted_at = <unix integer>`, every API that scans that column fails with `unsupported Scan, storing driver.Value type int64 into type *time.Time`. The visible symptom is a **blank or erroring user/token list in the dashboard even though the underlying rows are intact** — easy to misdiagnose as data loss. Write `SET deleted_at = datetime('now')`, or `DELETE` the rows outright (the `logs` table preserves the audit trail). To repair existing rows: `UPDATE <table> SET deleted_at = datetime(deleted_at, 'unixepoch') WHERE typeof(deleted_at) = 'integer'`.
+
+**23. Renaming the administrator account requires updating login references.**
+A root/admin username can be changed (password, permissions, and user id stay the same), and the old username stops working immediately. After renaming, update every credential file and automation script that logs in with the old name. Dashboards and historical logs aggregate by user id, so the rename does not disturb past statistics.
