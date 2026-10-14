@@ -123,3 +123,18 @@ The same request can behave differently under `stream:false` (buffered rebuild p
 
 **30. An MCP installer's startup self-check does not prove the feature works.**
 Self-checks typically only confirm that MCP `initialize` returns `serverInfo`, so a wrong gateway URL or an invalid API key **still passes**. End-to-end acceptance requires one real tool invocation (e.g. actually generating an image) plus confirming the artifact exists on disk and is recognized by `file`.
+
+**31. The xAI provider enforces a client-version gate, separate from the Codex one.**
+xAI rejects requests that declare a client version that is too old — the error reads `Your Grok CLI version (X) is outdated. Please update to version Y or later.`, and **every** `grok-*` model fails until the version is raised. This is not a quota or token problem. The version travels in its own header (`x-grok-client-version`), not `User-Agent`, and is configured independently of the Codex model-discovery version (`MODELS_CLIENT_VERSION`). Set `XAI_CLIENT_VERSION` in the environment and pass it through to the relay container explicitly. Triage: an error mentioning "Grok CLI version" is this gotcha; `authentication token has expired` points at a token problem instead.
+
+**32. A subscription renewal does not restore model discovery by itself.**
+After renewing, the relay can keep serving a stale (much smaller) model catalog, sometimes alongside a transient `authentication token has expired`. Restarting the relay is a required step, not an optional one: restart it, confirm `[model-cache] Initial refresh: N models available` in the logs matches expectations, re-sync the channel's `models` through the API, then run an end-to-end probe. Restarting without re-syncing leaves a gap where the upstream offers models the gateway does not route.
+
+**33. Remove models the upstream rejects; do not leave them in the channel list.**
+A model can sit in the channel list while the upstream refuses it outright (e.g. `The '<model>' model is not supported when using Codex with a ChatGPT account`). The gateway then advertises it in `/v1/models`, clients select it, and only the actual request fails — which reads like a gateway fault. Remove such entries from the channel `models` through the API (full-field update, see gotcha 11) so the exposed list contains only models that genuinely work.
+
+**34. Admin-API authentication needs both the access token and a user-id header.**
+Signing in returns `data.access_token` (a JWT, `token_type: Bearer`) plus `data.session`, and sets a refresh cookie whose `Path` is scoped to the auth endpoint — so that cookie never travels to other routes, and "login succeeded but the next call is 401" is expected rather than a bug. Send `Authorization: Bearer <access_token>` **and** `New-Api-User: <user-id>` together. List endpoints may also return `{"data":{"items":[…]}}` instead of a bare array. If a credentials file holds several password fields (one per auth layer), select the panel password by its exact key — fuzzy-matching on "pass" can pick up a Basic-Auth password and fail the login.
+
+**35. Model counts live at three layers; reconcile them before assuming loss.**
+`/v1/models` is the **union of every channel's model list**; the relay log's `N models available` is the **upstream catalog**, which may include models you deliberately do not expose. A mismatch such as "union 17 / upstream 15 / largest channel 14" is normal as long as each difference can be explained. To audit: list `models` per channel, sum them, compare against `/v1/models`, then against the discovery log.
