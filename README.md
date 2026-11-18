@@ -32,6 +32,11 @@ Official API providers can be added as separate New API channels.
 - No automated anti-abuse bypass or public quota resale workflow.
 - One revocable client token per authorized person.
 
+## Two tracks
+
+- **Track A — the gateway itself**: deploy, tokens, TLS, backup, rollback (this README + `docs/`).
+- **Track B — the team console**: expose a read-only stats endpoint and ship it as a DSH Desktop client plugin, with a client-plugin installer, offline preflight and rollback. See [`docs/dsh-console.md`](docs/dsh-console.md) and `templates/dsh-plugin/`.
+
 ## Start
 
 ```bash

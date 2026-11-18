@@ -1,0 +1,22 @@
+{
+  "name": "your-plugin",
+  "version": "1.0.0",
+  "description": "Gateway console for DSH Desktop (accounts, usage, proxy traffic)",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "client": {
+      "platform": "web"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.0.1"
+  },
+  "license": "UNLICENSED",
+  "private": true
+}

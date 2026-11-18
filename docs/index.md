@@ -8,3 +8,4 @@
 6. [`legal.md`](legal.md) — authorization and provider-terms boundary.
 7. [`../SECURITY.md`](../SECURITY.md) — vulnerability and secret handling.
 8. [`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md) — upstream licenses and versions.
+9. [`dsh-console.md`](dsh-console.md) — team console: DSH Desktop client plugin, read-only stats endpoint, alerting.

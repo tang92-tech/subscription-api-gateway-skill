@@ -1,7 +1,7 @@
 ---
 name: subscription-api-gateway
 summary: Deploy an authorized, self-hosted OpenAI-compatible gateway for a user's own Codex/ChatGPT subscription, with New API token management, TLS, auditing, rollback, and optional official API channels.
-description: "Deploy and verify an authorized self-hosted subscription API gateway using MultiVibe, New API, Docker and nginx. Use when a user asks Codex to turn an owned Codex/ChatGPT subscription into an OpenAI-compatible endpoint, issue separate client tokens, add official API providers, diagnose routing, or perform safe upgrades and rollback. Requires explicit account and server authorization; never use for resale, public sharing, credential theft, or bypassing provider safeguards."
+description: "Deploy and verify an authorized self-hosted subscription API gateway using MultiVibe, New API, Docker and nginx. Use when a user asks Codex to turn an owned Codex/ChatGPT subscription into an OpenAI-compatible endpoint, issue separate client tokens, add official API providers, diagnose routing, perform safe upgrades and rollback, or build a team-facing gateway console/dashboard as a DSH Desktop client plugin. Requires explicit account and server authorization; never use for resale, public sharing, credential theft, or bypassing provider safeguards."
 ---
 
 # Subscription API Gateway Skill
@@ -16,7 +16,10 @@ Use when the user asks to:
 - install or repair MultiVibe + New API + nginx on an authorized VPS;
 - issue one revocable New API token per authorized teammate;
 - add official OpenAI-compatible API channels such as DeepSeek or Kimi;
-- verify `/v1/models`, chat completions, TLS, local-only admin ports, backups, or rollback.
+- verify `/v1/models`, chat completions, TLS, local-only admin ports, backups, or rollback;
+- expose a read-only token-protected stats endpoint for dashboards;
+- build a team console (accounts, keys, model/user/daily usage, proxy traffic, alerts) as a DSH Desktop client plugin;
+- debug a DSH client plugin that is installed but does not appear in Settings.
 
 ## Not For / Boundaries
 
@@ -45,6 +48,37 @@ Ask only for non-secret inputs first:
 - whether to add only subscription routing or also official API channels.
 
 Secrets must be entered through a silent terminal prompt or created on the VPS. Never echo them.
+
+## Track B — Team console on DSH Desktop
+
+The gateway is only half the deliverable. Partners usually want their team to *see* it. Track B covers three layers, documented end-to-end in [`docs/dsh-console.md`](docs/dsh-console.md):
+
+| Layer | Deliverable | Where it runs |
+| --- | --- | --- |
+| 1. Data | read-only `?k=<token>` JSON endpoint with CORS | gateway VPS (nginx + generator) |
+| 2. Console | DSH Desktop client plugin (tabs, heatmap, drill-down) | each operator's machine |
+| 3. Alerts | cron + message channel, works while the laptop is off | gateway VPS |
+
+Non-negotiable findings from a real integration (do not re-derive the hard way):
+
+1. **A DSH client plugin needs three gates at once**: an enabled Loader row with a live fiber; the package resolvable **from the profile directory**; `dsh.client.platform === "web"` plus a real file at `exports["./client"]`. Missing gate 2 fails **silently** — no error, no log, no Settings entry.
+2. **Hand-written bundles are valid.** Wrap in `window.__ModuleLoader__.load({ id, factory })`, and `require()` **only platform seed modules** (`react`, `react/jsx-runtime`). Anything else throws `missed the module table`.
+3. **Every `client.js` change needs a DSH restart** — there is no HMR for static plugins. Verify offline first with `scripts/dsh-preflight.mjs`.
+4. **Money is `quota / QuotaPerUnit`** (default 500000) and it is *accounting*, not the provider's actual charge. Never divide twice; cross-check `SUM(users.used_quota)` against `SUM(logs.quota)`.
+5. **After an IP change, the DNS record does not follow.** A console that stays empty after a migration usually means the A record still points at the retired IP.
+
+```bash
+# offline gate check (no restart, no profile writes)
+node scripts/dsh-preflight.mjs ~/.dsh/plugins/your-plugin
+
+# install (backs up, uses the official `dsh plugin add` channel, writes the patch row)
+bash scripts/dsh-install.sh ~/.dsh/plugins/your-plugin your-plugin
+
+# one-command rollback
+bash scripts/dsh-rollback.sh your-plugin
+```
+
+Start from `templates/dsh-plugin/` — it is a working skeleton that already registers both `conversation.view` and `settings.section`.
 
 ## Quick Reference
 
@@ -186,6 +220,10 @@ Do not follow `main` or `latest`. Open a PR updating `versions.env`, build in a 
 - Acceptance: no bypass is installed without an explicit, compliant decision.
 
 ## References
+
+- [`docs/dsh-console.md`](docs/dsh-console.md) — DSH Desktop console: plugin loading gates, data contract, alerting
+- [`templates/dsh-plugin/`](templates/dsh-plugin/) — working client-plugin skeleton
+- [`scripts/dsh-preflight.mjs`](scripts/dsh-preflight.mjs) / [`dsh-install.sh`](scripts/dsh-install.sh) / [`dsh-rollback.sh`](scripts/dsh-rollback.sh)
 
 - `docs/index.md`: documentation map.
 - `docs/deployment.md`: human-readable deployment detail.
