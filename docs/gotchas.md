@@ -138,3 +138,35 @@ Signing in returns `data.access_token` (a JWT, `token_type: Bearer`) plus `data.
 
 **35. Model counts live at three layers; reconcile them before assuming loss.**
 `/v1/models` is the **union of every channel's model list**; the relay log's `N models available` is the **upstream catalog**, which may include models you deliberately do not expose. A mismatch such as "union 17 / upstream 15 / largest channel 14" is normal as long as each difference can be explained. To audit: list `models` per channel, sum them, compare against `/v1/models`, then against the discovery log.
+
+---
+
+## Remote hosting and OAuth
+
+**36. The upstream OAuth client accepts only a `localhost` callback, so a reverse-proxied dashboard can never finish login.**
+The relay dashboard and its callback listener both live on `127.0.0.1:1455`, and the registered client allows exactly `http://localhost:1455/auth/callback`. An operator who opens `http://<server-ip>:1455` (or a public hostname) from their own machine authorizes successfully, then watches the browser jump to `localhost:1455` **on their laptop**, where nothing listens — the tab errors out and the dashboard spins forever. Rewriting `OAUTH_REDIRECT_URI` does not help; the client rejects any non-localhost callback. Use an SSH tunnel (`ssh -L 1455:127.0.0.1:1455 <user>@<server>` and browse `http://localhost:1455`) or the dashboard's device-code flow. Diagnostic: with `docker compose logs -f multivibe` open, click login — if no callback request appears, the browser never reached the server.
+
+**37. A challenged datacenter egress IP breaks the chat path while leaving login intact.**
+`curl -s -o /dev/null -w '%{http_code}\n' https://chatgpt.com/` returning `403` with `__cf_chl_opt` / "Enable JavaScript and cookies to continue" / `cZone:` in the body means the egress IP is being challenged, not blocked by a credential problem. OAuth can still complete and the account can appear healthy, while every completion fails — which reads like a gateway bug. Verify this **before** building, and fix it by giving the relay a clean egress (WARP-style tunnel on a marked uid, or a second host with clean egress). Symptom repeats on every datacenter IP change, so re-check after any host migration.
+
+**38. The relay's model catalog is gated by the advertised client version.**
+Catalog discovery calls `GET /backend-api/codex/models?client_version=$MODELS_CLIENT_VERSION` — not `/backend-api/models`. Measured on one account: `0.160.0` returned 10 models, `0.169.0` returned 12 including the newest generation. Adding a model name to `PROXY_MODELS` alone therefore produces a **visible but unroutable** model: `/v1/models` lists it, and the call answers `no provider accounts configured for requested model`. Raise `MODELS_CLIENT_VERSION` to the version real clients run, then recreate the container to re-discover.
+
+**39. Per-account model blocks persist for a TTL and outlive the failed attempt that created them.**
+One rejected attempt (e.g. the upstream answering `not supported when using Codex with a ChatGPT account` because the advertised client version was too old) writes a block into the account state; afterwards the model answers `no provider accounts configured` even though the upstream would now accept it. Clear it through the relay admin API: `POST /admin/accounts/<id>/unblock?model=<model-id>` with `Authorization: Bearer $MULTIVIBE_ADMIN_TOKEN` (list ids via `/admin/accounts`).
+
+## Token administration
+
+**40. `PUT /api/token/` silently ignores `status`.**
+It returns `success: true` while the database value stays unchanged, so "disable this token" appears to work and does not. The endpoint the dashboard's toggle actually uses is `PUT /api/token/?status_only=1` with `{"id": <id>, "status": 2}`.
+
+**41. An administrator cannot read or edit another user's tokens.**
+`GET /api/token/<other-users-id>` answers `record not found`, and `GET /api/token/?user_id=<n>` ignores the filter and returns the caller's own tokens — these endpoints are scoped by the `New-Api-User` header. Either sign in as that user (with their password) to change their token, or write SQLite directly after backing the database up. Token rows are read from the database per request, so a SQLite change takes effect immediately (verified by calling with the affected key right after the write).
+
+**42. Cloudflare's bot rules can reject scripted panel access on `User-Agent` alone.**
+When the gateway hostname sits behind a Cloudflare proxy, a scripted login to `/api/user/login` can fail with `HTTP 403` and the body `error code: 1010` — nothing about the credentials is wrong. Measured: `Python-urllib/3.x` is blocked; `curl`, `axios`, `okhttp`, `node-fetch` and Electron-style UAs pass. Send a browser-style `User-Agent` when automating the panel API, and do not report "login failed" until the UA is ruled out.
+
+## Client onboarding
+
+**43. Model identifiers must be exact; display-name spellings return 403, and most clients surface that as "connection failed".**
+`This token has no access to model <name>` is returned both for models outside the token whitelist **and** for display-name spellings (`Kimi K3.1 Pro`, `GPT-6.2-Sol`) and stale aliases (`kimi-k3.1`). Several desktop clients, when their probe model is rejected, show a generic connection failure, which sends operators hunting for network faults. Also note `GET /v1/models` returning `200` does **not** prove the chat path works — always probe one real completion with the exact model ID before declaring an install healthy.
